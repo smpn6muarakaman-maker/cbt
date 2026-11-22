@@ -40,19 +40,12 @@
     }
 
     .glass-sidebar {
-      background: rgba(246, 247, 244, 0.97);
+      background: rgba(246, 247, 244, 0.98);
       backdrop-filter: blur(18px);
       -webkit-backdrop-filter: blur(18px);
       border-right: 1px solid rgba(226, 232, 240, 0.95);
-      transition: transform 0.25s ease, width 0.25s ease;
-    }
-
-    .glass-bottom-nav {
-      background: rgba(255, 255, 255, 0.96);
-      backdrop-filter: blur(20px);
-      -webkit-backdrop-filter: blur(20px);
-      border-top: 1px solid rgba(203, 213, 225, 0.85);
-      box-shadow: 0 -6px 24px rgba(15, 23, 42, 0.08);
+      box-shadow: 4px 0 24px rgba(15, 23, 42, 0.08);
+      transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
     }
 
     /* Custom Scrollbar */
@@ -68,18 +61,23 @@
       border-radius: 9999px;
     }
 
-    /* Responsive Sidebar vs Bottom Nav + Collapsible Left Sidebar */
-    @media (min-width: 1024px) {
-      .desktop-sidebar { display: flex !important; }
-      .desktop-sidebar.collapsed { transform: translateX(-100%); pointer-events: none; }
-      .mobile-bottom-nav { display: none !important; }
-      .main-with-sidebar { margin-left: 264px; padding-bottom: 2rem; transition: margin-left 0.25s ease; }
-      .main-with-sidebar.expanded { margin-left: 0 !important; }
+    /* Responsive Automatic Left Sidebar (Desktop & HP/Tablet) */
+    .app-sidebar {
+      display: flex !important;
+      transform: translateX(-100%);
     }
-    @media (max-width: 1023px) {
-      .desktop-sidebar { display: none !important; }
-      .mobile-bottom-nav { display: flex !important; }
-      .main-with-sidebar { margin-left: 0; padding-bottom: 5.5rem; }
+    .app-sidebar.is-open {
+      transform: translateX(0);
+    }
+    .main-with-sidebar {
+      margin-left: 0;
+      padding-bottom: 2.5rem;
+      transition: margin-left 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    @media (min-width: 1024px) {
+      .main-with-sidebar.sidebar-docked {
+        margin-left: 264px;
+      }
     }
 
     /* Anti-Cheat Exam Environment */
@@ -174,7 +172,7 @@
   if ('serviceWorker' in navigator && (window.location.protocol === 'https:' || window.location.hostname === 'localhost')) {
     try {
       const swCode = `
-        const CACHE_NAME = 'cbt-promax-v2.5';
+        const CACHE_NAME = 'cbt-promax-v2.6';
         self.addEventListener('install', () => { self.skipWaiting(); });
         self.addEventListener('activate', (e) => { e.waitUntil(self.clients.claim()); });
         self.addEventListener('fetch', (e) => { e.respondWith(fetch(e.request).catch(() => new Response('Offline'))); });
@@ -340,8 +338,8 @@
   const state = {
     currentUser: null,
     activeMenu: 'dashboard',
-    sidebarCollapsed: false,
-    mobileDrawerOpen: false,
+    // Otomatis terbuka di layar desktop (>=1024px) dan otomatis tertutup di HP/tablet (<1024px)
+    sidebarOpen: typeof window !== 'undefined' ? window.innerWidth >= 1024 : true,
     loading: false,
     toast: null,
     confirmDialog: null,
@@ -367,6 +365,8 @@
     docType: 'daftar_hadir',
     docKelas: 'SEMUA',
     docJadwalId: '',
+    editingBeritaAcara: false,
+    beritaAcaraForm: null,
 
     modal: null,
     modalSoalImagePreview: '',
@@ -381,6 +381,9 @@
     exam: {
       active: false,
       locked: false,
+      isSubmitting: false,
+      finishedHandled: false,
+      graceUntil: 0,
       jadwal: null,
       mapel: null,
       soalList: [],
@@ -481,6 +484,9 @@
   }
 
   function openConfirmDialog({ title, message, confirmLabel = 'Ya, Lanjutkan', variant = 'primary', onConfirm }) {
+    if (state.exam.active) {
+      state.exam.graceUntil = Date.now() + 2500;
+    }
     state.confirmDialog = { title, message, confirmLabel, variant, onConfirm };
     render();
   }
@@ -664,10 +670,9 @@
     if (!supabase) throw new Error('Supabase belum dikonfigurasi.');
     const { data, error } = await supabase.from(table).update(payload).eq('id', id).select();
     if (error) throw error;
-    if (data && data[0]) {
-      state.db[table] = (state.db[table] || []).map(row => row.id === id ? data[0] : row);
-    }
-    return data?.[0];
+    const updatedRow = data?.[0];
+    state.db[table] = (state.db[table] || []).map(row => row.id === id ? (updatedRow || { ...row, ...payload }) : row);
+    return updatedRow || state.db[table].find(row => row.id === id);
   }
 
   async function dbDeleteMany(table, ids) {
@@ -723,6 +728,7 @@
             role: 'admin'
           };
           state.activeMenu = 'dashboard';
+          state.sidebarOpen = window.innerWidth >= 1024;
           showToast('Berhasil masuk sebagai Administrator (Mode Preview)');
           return;
         }
@@ -743,6 +749,7 @@
 
         state.currentUser = { ...matchedUser };
         state.activeMenu = matchedUser.role === 'guru' ? 'dashboard' : 'jadwal_siswa';
+        state.sidebarOpen = window.innerWidth >= 1024;
         showToast(`Selamat datang, ${matchedUser.nama_lengkap}!`);
         return;
       }
@@ -768,6 +775,7 @@
           email: data.user.email
         };
         state.activeMenu = 'dashboard';
+        state.sidebarOpen = window.innerWidth >= 1024;
         await loadAllData();
         showToast('Berhasil masuk sebagai Administrator!');
         return;
@@ -795,6 +803,7 @@
 
       state.currentUser = { ...matchedUser };
       state.activeMenu = matchedUser.role === 'guru' ? 'dashboard' : 'jadwal_siswa';
+      state.sidebarOpen = window.innerWidth >= 1024;
       await loadAllData();
       showToast(`Selamat datang, ${matchedUser.nama_lengkap}!`);
     } catch (err) {
@@ -808,11 +817,12 @@
   async function handleLogout() {
     try {
       if (state.exam.active) {
+        state.exam.isSubmitting = true;
+        state.exam.active = false;
+        state.exam.locked = false;
         clearInterval(state.exam.timerInterval);
         releaseScreenWakeLock();
         setAntiTranslate(false);
-        state.exam.active = false;
-        state.exam.locked = false;
       }
       if (state.currentUser?.role === 'admin' && !IS_PREVIEW && supabase) {
         await supabase.auth.signOut().catch(() => {});
@@ -837,7 +847,7 @@
   }
 
   // =========================================================================
-  // ANTI-CHEAT ENGINE
+  // ANTI-CHEAT ENGINE (AMAN SAAT TOMBOL SELESAI DITEKAN DI HP)
   // =========================================================================
   function safeRequestFullscreen() {
     try {
@@ -866,6 +876,7 @@
   }
 
   function showLockedCurtain(reason, count, maxAllowed) {
+    if (!state.exam.active || state.exam.isSubmitting) return;
     const curtain = document.getElementById('security-curtain');
     const titleEl = document.getElementById('curtain-title');
     const reasonEl = document.getElementById('curtain-reason');
@@ -887,7 +898,10 @@
 
   let lastViolationTimestamp = 0;
   async function recordViolation(reason) {
-    if (!state.exam.active || state.exam.locked) return;
+    // Jangan pernah mencatat pelanggaran jika ujian sudah tidak aktif, terkunci, sedang dikumpulkan/selesai, atau dalam jeda transisi
+    if (!state.exam.active || state.exam.locked || state.exam.isSubmitting || state.exam.finishedHandled) return;
+    if (Date.now() < (state.exam.graceUntil || 0)) return;
+
     const now = Date.now();
     if (now - lastViolationTimestamp < 1200) return;
     lastViolationTimestamp = now;
@@ -907,6 +921,7 @@
     const shouldLock = newCount >= maxAllowed;
 
     if (sesi) {
+      if (sesi.status === 'selesai' || state.exam.isSubmitting) return;
       sesi.jumlah_pelanggaran = newCount;
       sesi.log_pelanggaran = newLogs;
       if (shouldLock) sesi.status = 'terkunci';
@@ -918,6 +933,8 @@
         });
       } catch (e) {}
     }
+
+    if (!state.exam.active || state.exam.isSubmitting) return;
 
     if (shouldLock) {
       state.exam.locked = true;
@@ -963,6 +980,7 @@
       if (currentSesi.status !== 'terkunci') {
         state.exam.sesiRecord = currentSesi;
         state.exam.locked = false;
+        state.exam.graceUntil = Date.now() + 2000;
         const curtain = document.getElementById('security-curtain');
         if (curtain) curtain.style.display = 'none';
         safeRequestFullscreen();
@@ -980,6 +998,7 @@
   function setupAntiCheatListeners() {
     document.getElementById('btn-dismiss-curtain')?.addEventListener('click', () => {
       if (state.exam.locked) return;
+      state.exam.graceUntil = Date.now() + 1800;
       const curtain = document.getElementById('security-curtain');
       if (curtain) curtain.style.display = 'none';
       safeRequestFullscreen();
@@ -989,7 +1008,7 @@
     document.getElementById('btn-check-unlock')?.addEventListener('click', checkUnlockStatus);
 
     document.addEventListener('visibilitychange', () => {
-      if (!state.exam.active) return;
+      if (!state.exam.active || state.exam.isSubmitting) return;
       if (document.hidden) {
         recordViolation('Keluar dari halaman / berpindah tab ujian');
       } else if (!state.exam.locked) {
@@ -998,19 +1017,21 @@
     });
 
     window.addEventListener('blur', () => {
-      if (!state.exam.active) return;
+      if (!state.exam.active || state.exam.isSubmitting) return;
+      // Jangan anggap blur jika dialog konfirmasi Selesai sedang terbuka
+      if (state.confirmDialog) return;
       recordViolation('Membuka aplikasi lain / kehilangan fokus layar ujian');
     });
 
     document.addEventListener('fullscreenchange', () => {
-      if (!state.exam.active || state.exam.locked) return;
+      if (!state.exam.active || state.exam.locked || state.exam.isSubmitting) return;
       if (!document.fullscreenElement) {
         recordViolation('Keluar dari mode layar penuh (Fullscreen)');
       }
     });
 
     document.addEventListener('touchstart', (e) => {
-      if (!state.exam.active) return;
+      if (!state.exam.active || state.exam.isSubmitting) return;
       if (e.touches && e.touches.length >= 3) {
         if (e.cancelable) e.preventDefault();
         recordViolation('Gestur Screenshot 3 Jari terdeteksi');
@@ -1018,7 +1039,7 @@
     }, { passive: false });
 
     document.addEventListener('touchmove', (e) => {
-      if (!state.exam.active) return;
+      if (!state.exam.active || state.exam.isSubmitting) return;
       if (e.touches && e.touches.length >= 3) {
         if (e.cancelable) e.preventDefault();
         recordViolation('Gestur Geser 3 Jari (Screenshot) terdeteksi');
@@ -1026,7 +1047,7 @@
     }, { passive: false });
 
     window.addEventListener('keydown', (e) => {
-      if (!state.exam.active) return;
+      if (!state.exam.active || state.exam.isSubmitting) return;
       const key = e.key || '';
       const isVolumeOrPower = ['AudioVolumeDown', 'AudioVolumeUp', 'VolumeDown', 'VolumeUp', 'Power'].includes(key);
       const isPrintScreen = key === 'PrintScreen' || e.code === 'PrintScreen';
@@ -1048,7 +1069,7 @@
     }, true);
 
     window.addEventListener('keyup', (e) => {
-      if (!state.exam.active) return;
+      if (!state.exam.active || state.exam.isSubmitting) return;
       if (e.key === 'PrintScreen' || e.code === 'PrintScreen') {
         recordViolation('Tombol PrintScreen terdeteksi');
       }
@@ -1152,6 +1173,9 @@
     state.exam = {
       active: true,
       locked: isLocked,
+      isSubmitting: false,
+      finishedHandled: false,
+      graceUntil: Date.now() + 2500, // Masa tenggang 2.5 detik saat masuk fullscreen & menutup keyboard HP
       jadwal,
       mapel,
       soalList,
@@ -1163,7 +1187,7 @@
       fontSize: 'base',
       showDaftarSoalMobile: false,
       timerInterval: setInterval(() => {
-        if (!state.exam.active || state.exam.locked) return;
+        if (!state.exam.active || state.exam.locked || state.exam.isSubmitting) return;
         state.exam.remainingSeconds -= 1;
         const timerEl = document.getElementById('exam-timer-text');
         const barEl = document.getElementById('exam-timer-bar');
@@ -1198,9 +1222,10 @@
   }
 
   async function saveAnswerProgress(soalId, value) {
+    if (!state.exam.active || state.exam.isSubmitting) return;
     state.exam.jawaban[soalId] = value;
     render();
-    if (state.exam.sesiRecord) {
+    if (state.exam.sesiRecord && !state.exam.isSubmitting) {
       try {
         await dbUpdate('sesi_ujian_siswa', state.exam.sesiRecord.id, {
           jawaban_json: state.exam.jawaban,
@@ -1211,9 +1236,10 @@
   }
 
   async function toggleRagu(soalId) {
+    if (!state.exam.active || state.exam.isSubmitting) return;
     state.exam.ragu[soalId] = !state.exam.ragu[soalId];
     render();
-    if (state.exam.sesiRecord) {
+    if (state.exam.sesiRecord && !state.exam.isSubmitting) {
       try {
         await dbUpdate('sesi_ujian_siswa', state.exam.sesiRecord.id, {
           ragu_json: state.exam.ragu
@@ -1223,7 +1249,9 @@
   }
 
   function requestFinishExamConfirmation() {
-    if (!state.exam.active) return;
+    if (!state.exam.active || state.exam.isSubmitting) return;
+    state.exam.graceUntil = Date.now() + 3000;
+
     const total = state.exam.soalList.length;
     const answered = state.exam.soalList.filter(s => {
       const a = state.exam.jawaban[s.id];
@@ -1239,17 +1267,29 @@
       confirmLabel: 'Ya, Selesai & Kumpulkan',
       variant: 'primary',
       onConfirm: async () => {
+        // Segera matikan deteksi pelanggaran sebelum keluar dari mode fullscreen
+        state.exam.isSubmitting = true;
+        state.exam.active = false;
         await finalizeExamSubmission();
       }
     });
   }
 
   async function finalizeExamSubmission() {
-    if (!state.exam.active) return;
+    if (state.exam.finishedHandled) return;
+    state.exam.finishedHandled = true;
+    state.exam.isSubmitting = true;
+    state.exam.active = false;
+    state.exam.locked = false;
+
+    // Pastikan tirai pelanggaran tidak muncul saat siswa keluar ujian
+    const curtain = document.getElementById('security-curtain');
+    if (curtain) curtain.style.display = 'none';
 
     clearInterval(state.exam.timerInterval);
     releaseScreenWakeLock();
     setAntiTranslate(false);
+
     try {
       if (document.fullscreenElement && document.exitFullscreen) {
         await document.exitFullscreen().catch(() => {});
@@ -1291,21 +1331,43 @@
 
     const skorPg = Math.round(skorDiperolehObjektif * 100) / 100;
     const nilaiAkhir = skorPg;
+    const selesaiIso = new Date().toISOString();
 
-    try {
-      await dbUpdate('sesi_ujian_siswa', state.exam.sesiRecord.id, {
-        jawaban_json: state.exam.jawaban,
-        ragu_json: state.exam.ragu,
-        skor_pg: skorPg,
-        nilai_akhir: nilaiAkhir,
-        status: 'selesai',
-        waktu_selesai: new Date().toISOString()
-      });
-    } catch (e) {}
+    const sesiId = state.exam.sesiRecord?.id;
+    const finishPayload = {
+      jawaban_json: state.exam.jawaban,
+      ragu_json: state.exam.ragu,
+      skor_pg: skorPg,
+      nilai_akhir: nilaiAkhir,
+      status: 'selesai',
+      waktu_selesai: selesaiIso
+    };
 
-    state.exam.active = false;
-    state.exam.locked = false;
+    // Perbarui state lokal terlebih dahulu agar langsung terbaca Selesai
+    if (sesiId) {
+      state.db.sesi_ujian_siswa = (state.db.sesi_ujian_siswa || []).map(row =>
+        row.id === sesiId ? { ...row, ...finishPayload } : row
+      );
+      if (state.exam.sesiRecord) {
+        Object.assign(state.exam.sesiRecord, finishPayload);
+      }
+
+      // Simpan ke database dengan mekanisme retry (maksimal 3x percobaan) jika koneksi HP sempat tersendat
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          await dbUpdate('sesi_ujian_siswa', sesiId, finishPayload);
+          break;
+        } catch (err) {
+          if (attempt < 3) {
+            await new Promise(res => setTimeout(res, 700));
+          }
+        }
+      }
+    }
+
+    state.exam.isSubmitting = false;
     state.activeMenu = 'nilai_siswa';
+    state.sidebarOpen = window.innerWidth >= 1024;
     showToast('Ujian berhasil diselesaikan dan dikumpulkan!');
     render();
   }
@@ -2253,7 +2315,7 @@
   }
 
   // =========================================================================
-  // RENDER SHELL UTAMA (ADMIN / GURU / SISWA + COLLAPSIBLE SIDEBAR KIRI ATAS)
+  // RENDER SHELL UTAMA (NAVIGASI SIDEBAR OTOMATIS DI KIRI ATAS - TANPA MENU BAWAH)
   // =========================================================================
   function getMenuItemsForRole(role) {
     if (role === 'admin') {
@@ -2295,12 +2357,14 @@
 
     return `
       <div class="min-h-screen flex flex-col">
+        <!-- Header Utama dengan Tombol Navigasi Sidebar Otomatis di Pojok Kiri Atas -->
         <header class="sticky top-0 z-40 bg-white/95 backdrop-blur border-b border-slate-200/90 px-3 sm:px-5 py-2.5 shadow-2xs no-print">
           <div class="flex items-center justify-between gap-2">
             <div class="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
-              <button type="button" id="btn-toggle-sidebar" title="${state.sidebarCollapsed ? 'Tampilkan Menu Navigasi' : 'Sembunyikan Menu Navigasi'}"
-                class="hidden lg:flex w-8 h-8 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 items-center justify-center font-extrabold text-sm transition shrink-0">
-                ${state.sidebarCollapsed ? '›' : '‹'}
+              <!-- Tombol Navigasi Sidebar Kiri Atas (Aktif di HP, Tablet & Desktop) -->
+              <button type="button" id="btn-toggle-sidebar" title="${state.sidebarOpen ? 'Tutup Menu Navigasi' : 'Buka Menu Navigasi'}"
+                class="w-9 h-9 rounded-xl border border-slate-200 bg-slate-50 hover:bg-emerald-50 hover:border-emerald-300 text-slate-800 flex items-center justify-center font-extrabold text-base transition shrink-0 shadow-2xs">
+                ${state.sidebarOpen ? '✕' : '☰'}
               </button>
 
               <div class="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-white border border-slate-200/90 shadow-2xs flex items-center justify-center overflow-hidden p-0.5 shrink-0">
@@ -2310,7 +2374,7 @@
               <div class="min-w-0 flex-1">
                 <div class="flex items-center gap-1.5 flex-wrap">
                   <span class="font-extrabold text-xs sm:text-base text-slate-900 truncate">CBT Promax</span>
-                  <span class="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 text-[9px] sm:text-[10px] font-bold shrink-0">v2.5</span>
+                  <span class="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 text-[9px] sm:text-[10px] font-bold shrink-0">v2.6</span>
                   ${IS_PREVIEW ? '<span class="hidden md:inline-block px-2 py-0.5 rounded bg-purple-100 text-purple-800 border border-purple-200 text-[10px] font-extrabold shrink-0">Mode Preview Aktif</span>' : ''}
                 </div>
                 <div class="text-[10px] sm:text-[11px] text-slate-500 font-semibold truncate">${cfg.nama_sekolah}</div>
@@ -2344,11 +2408,22 @@
           </div>
         </header>
 
-        <aside class="desktop-sidebar ${state.sidebarCollapsed ? 'collapsed' : ''} fixed top-[57px] bottom-0 left-0 w-[264px] glass-sidebar flex-col justify-between p-4 z-30 no-print">
+        <!-- Backdrop Overlay Otomatis untuk Layar HP/Tablet saat Sidebar Terbuka -->
+        ${state.sidebarOpen ? `
+          <div id="sidebar-backdrop" class="fixed inset-0 top-[57px] z-30 bg-slate-900/35 backdrop-blur-[1px] lg:hidden no-print"></div>
+        ` : ''}
+
+        <!-- Navigasi Sidebar Kiri Otomatis (Tanpa Menu Bawah yang Mengganggu HP) -->
+        <aside class="app-sidebar ${state.sidebarOpen ? 'is-open' : ''} fixed top-[57px] bottom-0 left-0 w-[264px] glass-sidebar flex-col justify-between p-4 z-40 no-print">
           <div class="overflow-y-auto space-y-1.5 pr-0.5">
-            <div class="px-3 py-2 text-[10px] font-extrabold tracking-widest text-emerald-800/80 uppercase flex items-center gap-1.5">
-              <span class="w-1.5 h-1.5 rounded-full bg-emerald-600"></span>
-              <span>NAVIGASI ${roleLabel}</span>
+            <div class="px-3 py-2 text-[10px] font-extrabold tracking-widest text-emerald-800/80 uppercase flex items-center justify-between">
+              <span class="flex items-center gap-1.5">
+                <span class="w-1.5 h-1.5 rounded-full bg-emerald-600"></span>
+                <span>NAVIGASI ${roleLabel}</span>
+              </span>
+              <button type="button" id="btn-close-sidebar-inside" class="lg:hidden text-slate-400 hover:text-slate-700 text-xs font-bold px-1.5 py-0.5 rounded">
+                ✕
+              </button>
             </div>
             ${menus.map(m => {
               const active = state.activeMenu === m.id;
@@ -2378,51 +2453,11 @@
           </div>
         </aside>
 
-        <main class="main-with-sidebar ${state.sidebarCollapsed ? 'expanded' : ''} flex-1 p-3.5 sm:p-6 lg:p-8 max-w-full min-w-0">
+        <main class="main-with-sidebar ${state.sidebarOpen ? 'sidebar-docked' : ''} flex-1 p-3.5 sm:p-6 lg:p-8 max-w-full min-w-0">
           <div class="max-w-6xl mx-auto">
             ${renderActiveSection()}
           </div>
         </main>
-
-        <nav class="mobile-bottom-nav fixed bottom-0 left-0 right-0 z-40 glass-bottom-nav px-2 py-1.5 justify-around items-center no-print">
-          ${menus.slice(0, 4).map(m => {
-            const active = state.activeMenu === m.id;
-            return `
-              <button type="button" data-menu="${m.id}"
-                class="nav-menu-btn flex flex-col items-center justify-center py-1.5 px-2 rounded-xl min-w-[64px] transition ${active ? 'bg-gradient-to-r from-[#4f6d4a] to-[#3f5b3a] text-white shadow-sm' : m.color}">
-                <span class="text-base leading-none mb-1">${m.icon}</span>
-                <span class="text-[10px] font-bold truncate max-w-[72px]">${m.label.split(' ')[0]}</span>
-              </button>
-            `;
-          }).join('')}
-          ${menus.length > 4 ? `
-            <button type="button" id="btn-mobile-more"
-              class="flex flex-col items-center justify-center py-1.5 px-2 rounded-xl min-w-[64px] text-indigo-700">
-              <span class="text-base leading-none mb-1">☰</span>
-              <span class="text-[10px] font-bold">Menu Lain</span>
-            </button>
-          ` : ''}
-        </nav>
-
-        ${state.mobileDrawerOpen ? `
-          <div class="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-end lg:hidden no-print" id="mobile-drawer-backdrop">
-            <div class="w-full bg-white rounded-t-3xl p-5 space-y-2 shadow-2xl">
-              <div class="flex items-center justify-between pb-2 border-b border-slate-100">
-                <span class="text-xs font-extrabold uppercase text-emerald-800">Semua Menu Aplikasi</span>
-                <button type="button" id="btn-close-mobile-drawer" class="text-xs font-bold text-slate-500 px-2 py-1">Tutup ✕</button>
-              </div>
-              <div class="grid grid-cols-2 gap-2 pt-1">
-                ${menus.map(m => `
-                  <button type="button" data-menu="${m.id}"
-                    class="nav-menu-btn flex items-center gap-2 p-3 rounded-xl border text-left text-xs font-bold ${state.activeMenu === m.id ? 'bg-gradient-to-r from-[#4f6d4a] to-[#3f5b3a] text-white border-[#4f6d4a]' : `bg-slate-50 ${m.color} border-slate-200`}">
-                    <span>${m.icon}</span>
-                    <span class="truncate">${m.label}</span>
-                  </button>
-                `).join('')}
-              </div>
-            </div>
-          </div>
-        ` : ''}
       </div>
     `;
   }
@@ -2506,7 +2541,7 @@
             <button type="button" data-menu="cetak_dokumen" class="nav-menu-btn glass-panel rounded-2xl p-5 text-left hover:border-[#5d7359] transition">
               <div class="w-10 h-10 rounded-xl bg-[#5d7359] text-white flex items-center justify-center mb-3 font-bold">⎙</div>
               <div class="text-sm font-extrabold text-slate-900 mb-1">Cetak Dokumen & Kartu →</div>
-              <p class="text-xs text-slate-500 leading-relaxed">Cetak Kartu Peserta, Daftar Hadir, dan Berita Acara format PDF A4.</p>
+              <p class="text-xs text-slate-500 leading-relaxed">Cetak Kartu Peserta, Daftar Hadir, dan Berita Acara (dapat diedit) format PDF A4.</p>
             </button>
           ` : ''}
           <button type="button" data-menu="bank_soal" class="nav-menu-btn glass-panel rounded-2xl p-5 text-left hover:border-[#5d7359] transition">
@@ -2721,10 +2756,8 @@
     const authMapelIds = getAuthorizedMapelIds();
     const isGuru = state.currentUser.role === 'guru';
 
-    // Daftar jadwal ujian yang berhak dipantau (hanya yang sudah dijadwalkan)
     const scheduledList = state.db.jadwal_ujian.filter(j => !isGuru || authMapelIds.has(j.mapel_id));
 
-    // Pencarian singkat mapel terjadwal jika jumlahnya banyak
     const searchQ = (state.filterMonitoringSearch || '').trim().toLowerCase();
     const filteredScheduled = searchQ
       ? scheduledList.filter(j => {
@@ -2734,7 +2767,6 @@
         })
       : scheduledList;
 
-    // Jadwal/Mapel terjadwal yang sedang diklik
     const selectedJadwalId = scheduledList.some(j => j.id === state.filterMonitoringJadwal)
       ? state.filterMonitoringJadwal
       : '';
@@ -2743,13 +2775,11 @@
       ? state.db.mata_pelajaran.find(m => m.id === activeJadwal.mapel_id)
       : null;
 
-    // Daftar kelas dari jadwal aktif untuk filter sub-kelas di tabel peserta
     const jadwalKelasList = activeJadwal ? parseKelasString(activeJadwal.kelas_target) : [];
     const selectedMonitoringKelas = jadwalKelasList.includes(state.filterMonitoringKelas)
       ? state.filterMonitoringKelas
       : '';
 
-    // Sesi peserta HANYA dimuat untuk jadwal/mapel terjadwal yang sedang diklik
     const sesiList = selectedJadwalId
       ? state.db.sesi_ujian_siswa.filter(sesi => {
           if (sesi.jadwal_id !== selectedJadwalId) return false;
@@ -2771,7 +2801,6 @@
 
     return `
       <div class="space-y-5">
-        <!-- Header Monitoring Live -->
         <div class="glass-panel rounded-2xl p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
             <h2 class="text-lg sm:text-xl font-extrabold text-slate-900">Monitoring Peserta Ujian (Live)</h2>
@@ -2784,7 +2813,6 @@
           </button>
         </div>
 
-        <!-- Panel Kartu Pilihan Mapel yang Sudah Dijadwalkan -->
         <div class="glass-panel rounded-2xl p-5 space-y-3.5">
           <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <div class="text-xs font-extrabold uppercase tracking-wider text-slate-700">
@@ -2854,7 +2882,6 @@
           `}
         </div>
 
-        <!-- Tabel Peserta Ujian Live: HANYA TAMPIL JIKA MAPEL TERJADWAL SUDAH DIKLIK -->
         ${!selectedJadwalId ? `
           <div class="glass-panel rounded-2xl p-10 text-center space-y-2 border-dashed border-2 border-slate-200">
             <div class="text-2xl">👆</div>
@@ -2910,6 +2937,7 @@
                     const answeredCount = sesi.jawaban_json ? Object.keys(sesi.jawaban_json).length : 0;
                     const pelanggaran = sesi.jumlah_pelanggaran || 0;
                     const isLocked = sesi.status === 'terkunci';
+                    const isDone = sesi.status === 'selesai';
 
                     return `
                       <tr class="hover:bg-slate-50/70 ${isLocked ? 'bg-rose-50/60' : ''}">
@@ -2928,9 +2956,13 @@
                             <span class="px-2.5 py-1 rounded-full text-[11px] font-extrabold bg-rose-600 text-white">
                               🔒 TERKUNCI
                             </span>
+                          ` : isDone ? `
+                            <span class="px-2.5 py-1 rounded-full text-[11px] font-extrabold bg-emerald-100 text-emerald-800">
+                              ✓ Selesai (Nilai: ${sesi.nilai_akhir || 0})
+                            </span>
                           ` : `
-                            <span class="px-2.5 py-1 rounded-full text-[11px] font-bold ${sesi.status === 'selesai' ? 'bg-slate-200 text-slate-800' : 'bg-amber-100 text-amber-800'}">
-                              ${sesi.status === 'selesai' ? 'Selesai' : 'Sedang Mengerjakan'}
+                            <span class="px-2.5 py-1 rounded-full text-[11px] font-bold bg-amber-100 text-amber-800">
+                              Sedang Mengerjakan
                             </span>
                           `}
                         </td>
@@ -2957,8 +2989,31 @@
   }
 
   // -------------------------------------------------------------------------
-  // 4. CETAK DOKUMEN ANBK
+  // 4. CETAK DOKUMEN ANBK (DENGAN FITUR EDIT BERITA ACARA PELAKSANAAN)
   // -------------------------------------------------------------------------
+  function getDefaultBeritaAcaraData(cfg, jadwal, mapel, totalSiswa) {
+    const hariIni = new Intl.DateTimeFormat('id-ID', {
+      timeZone: 'Asia/Makassar', weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
+    }).format(new Date());
+    const tglTtd = new Intl.DateTimeFormat('id-ID', {
+      timeZone: 'Asia/Makassar', day: 'numeric', month: 'long', year: 'numeric'
+    }).format(new Date());
+
+    return {
+      judul_dokumen: 'BERITA ACARA PELAKSANAAN ASESMEN / UJIAN BERBASIS KOMPUTER',
+      hari_tanggal: hariIni,
+      mata_pelajaran: `${jadwal?.judul_ujian || 'Ujian CBT'} - ${mapel?.nama_mapel || 'Semua Mata Pelajaran'}`,
+      ruang_sesi: 'Ruang 01 / Lab Komputer 1 - Sesi 1',
+      waktu_pelaksanaan: '07.30 - 09.30 WITA',
+      jumlah_seharusnya: String(totalSiswa),
+      jumlah_hadir: String(totalSiswa),
+      jumlah_tidak_hadir: '0',
+      rincian_tidak_hadir: 'Nihil (Semua peserta hadir lengkap)',
+      catatan_khusus: 'Pelaksanaan asesmen CBT berjalan tertib, aman, lancar dan terkendali. Tidak ada kendala teknis server lokal maupun pemadaman listrik.',
+      tempat_tanggal_ttd: `Muara Kaman, ${tglTtd}`
+    };
+  }
+
   function renderCetakDokumenSection() {
     const cfg = getSchoolConfig();
     const siswaAll = state.db.users_cbt.filter(u => u.role === 'siswa');
@@ -2975,6 +3030,10 @@
     const activeJadwal = jadwals.find(j => j.id === state.docJadwalId) || jadwals[0];
     const activeMapel = state.db.mata_pelajaran.find(m => m.id === activeJadwal?.mapel_id);
 
+    if (!state.beritaAcaraForm) {
+      state.beritaAcaraForm = getDefaultBeritaAcaraData(cfg, activeJadwal, activeMapel, filteredSiswa.length);
+    }
+
     return `
       <div class="space-y-5">
         <div class="glass-panel rounded-2xl p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4 no-print">
@@ -2989,10 +3048,25 @@
               <option value="berita_acara" ${state.docType === 'berita_acara' ? 'selected' : ''}>Berita Acara Pelaksanaan</option>
             </select>
 
+            ${state.docType === 'berita_acara' && jadwals.length > 0 ? `
+              <select id="select-doc-jadwal" class="px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs font-bold">
+                ${jadwals.map(j => {
+                  const mp = state.db.mata_pelajaran.find(m => m.id === j.mapel_id);
+                  return `<option value="${j.id}" ${activeJadwal?.id === j.id ? 'selected' : ''}>${mp?.nama_mapel || 'Mapel'} - ${j.judul_ujian}</option>`;
+                }).join('')}
+              </select>
+            ` : ''}
+
             <select id="select-doc-kelas" class="px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs font-bold">
               <option value="SEMUA" ${activeKelas === 'SEMUA' ? 'selected' : ''}>Semua Kelas (${siswaAll.length} Siswa)</option>
               ${kelasList.map(k => `<option value="${k}" ${activeKelas === k ? 'selected' : ''}>Kelas ${k}</option>`).join('')}
             </select>
+
+            ${state.docType === 'berita_acara' ? `
+              <button type="button" id="btn-toggle-edit-ba" class="px-3.5 py-2 rounded-xl border ${state.editingBeritaAcara ? 'border-amber-400 bg-amber-100 text-amber-900' : 'border-indigo-300 bg-indigo-50 text-indigo-800'} text-xs font-bold">
+                ${state.editingBeritaAcara ? '✓ Selesai Edit' : '✎ Edit Berita Acara'}
+              </button>
+            ` : ''}
 
             <button type="button" id="btn-print-doc" class="px-4 py-2 rounded-xl bg-[#5d7359] hover:bg-[#4a5d47] text-white text-xs font-bold flex items-center gap-1.5">
               <span>🖨 Cetak / Simpan PDF</span>
@@ -3000,9 +3074,70 @@
           </div>
         </div>
 
+        ${state.docType === 'berita_acara' && state.editingBeritaAcara ? `
+          <div class="glass-panel rounded-2xl p-5 border-2 border-indigo-200 bg-indigo-50/40 space-y-4 no-print text-xs">
+            <div class="flex flex-wrap items-center justify-between gap-2 border-b border-indigo-200/70 pb-2.5">
+              <div>
+                <h3 class="text-sm font-extrabold text-indigo-950">✎ Editor Isi Berita Acara Pelaksanaan</h3>
+                <p class="text-[11px] text-slate-600">Ubah teks di bawah ini, pratinjau dokumen PDF A4 di bawah akan langsung terbarui otomatis.</p>
+              </div>
+              <button type="button" id="btn-reset-ba" class="px-3 py-1.5 rounded-xl bg-white border border-slate-300 hover:bg-slate-100 text-slate-700 font-bold text-[11px]">
+                ↺ Reset ke Default
+              </button>
+            </div>
+
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              <div class="sm:col-span-2 lg:col-span-3">
+                <label class="block font-bold text-slate-700 mb-1">Judul Dokumen Berita Acara</label>
+                <input type="text" data-ba-field="judul_dokumen" value="${state.beritaAcaraForm.judul_dokumen}" class="input-ba-field w-full p-2.5 rounded-xl border border-slate-300 bg-white font-bold" />
+              </div>
+              <div>
+                <label class="block font-bold text-slate-700 mb-1">Hari & Tanggal Pelaksanaan</label>
+                <input type="text" data-ba-field="hari_tanggal" value="${state.beritaAcaraForm.hari_tanggal}" class="input-ba-field w-full p-2.5 rounded-xl border border-slate-300 bg-white" />
+              </div>
+              <div>
+                <label class="block font-bold text-slate-700 mb-1">Mata Pelajaran / Judul Ujian</label>
+                <input type="text" data-ba-field="mata_pelajaran" value="${state.beritaAcaraForm.mata_pelajaran}" class="input-ba-field w-full p-2.5 rounded-xl border border-slate-300 bg-white" />
+              </div>
+              <div>
+                <label class="block font-bold text-slate-700 mb-1">Ruang Ujian & Sesi</label>
+                <input type="text" data-ba-field="ruang_sesi" value="${state.beritaAcaraForm.ruang_sesi}" class="input-ba-field w-full p-2.5 rounded-xl border border-slate-300 bg-white" />
+              </div>
+              <div>
+                <label class="block font-bold text-slate-700 mb-1">Waktu Pelaksanaan (Jam)</label>
+                <input type="text" data-ba-field="waktu_pelaksanaan" value="${state.beritaAcaraForm.waktu_pelaksanaan}" class="input-ba-field w-full p-2.5 rounded-xl border border-slate-300 bg-white" />
+              </div>
+              <div>
+                <label class="block font-bold text-slate-700 mb-1">Jumlah Peserta Seharusnya</label>
+                <input type="text" data-ba-field="jumlah_seharusnya" value="${state.beritaAcaraForm.jumlah_seharusnya}" class="input-ba-field w-full p-2.5 rounded-xl border border-slate-300 bg-white" />
+              </div>
+              <div>
+                <label class="block font-bold text-slate-700 mb-1">Jumlah Peserta Hadir</label>
+                <input type="text" data-ba-field="jumlah_hadir" value="${state.beritaAcaraForm.jumlah_hadir}" class="input-ba-field w-full p-2.5 rounded-xl border border-slate-300 bg-white" />
+              </div>
+              <div>
+                <label class="block font-bold text-slate-700 mb-1">Jumlah Peserta Tidak Hadir</label>
+                <input type="text" data-ba-field="jumlah_tidak_hadir" value="${state.beritaAcaraForm.jumlah_tidak_hadir}" class="input-ba-field w-full p-2.5 rounded-xl border border-slate-300 bg-white" />
+              </div>
+              <div class="sm:col-span-2">
+                <label class="block font-bold text-slate-700 mb-1">Rincian Peserta Tidak Hadir</label>
+                <input type="text" data-ba-field="rincian_tidak_hadir" value="${state.beritaAcaraForm.rincian_tidak_hadir}" class="input-ba-field w-full p-2.5 rounded-xl border border-slate-300 bg-white" />
+              </div>
+              <div>
+                <label class="block font-bold text-slate-700 mb-1">Tempat & Tanggal Tanda Tangan</label>
+                <input type="text" data-ba-field="tempat_tanggal_ttd" value="${state.beritaAcaraForm.tempat_tanggal_ttd}" class="input-ba-field w-full p-2.5 rounded-xl border border-slate-300 bg-white" />
+              </div>
+              <div class="sm:col-span-2 lg:col-span-3">
+                <label class="block font-bold text-slate-700 mb-1">Catatan Kejadian Khusus Selama Pelaksanaan Ujian</label>
+                <textarea rows="2" data-ba-field="catatan_khusus" class="input-ba-field w-full p-2.5 rounded-xl border border-slate-300 bg-white">${state.beritaAcaraForm.catatan_khusus}</textarea>
+              </div>
+            </div>
+          </div>
+        ` : ''}
+
         <div class="glass-panel rounded-2xl p-4 sm:p-8 overflow-x-auto bg-white">
           <div id="print-area" class="max-w-[210mm] mx-auto bg-white text-black text-[10pt]">
-            ${state.docType === 'berita_acara' ? renderBeritaAcaraPrint(cfg, activeJadwal, activeMapel, siswaAll.length) : ''}
+            ${state.docType === 'berita_acara' ? renderBeritaAcaraPrint(cfg, state.beritaAcaraForm) : ''}
             ${state.docType === 'daftar_hadir' ? renderDaftarHadirPrint(cfg, filteredSiswa, activeKelas) : ''}
             ${state.docType === 'kartu_peserta' ? renderKartuPesertaPrint(cfg, filteredSiswa) : ''}
           </div>
@@ -3011,36 +3146,32 @@
     `;
   }
 
-  function renderBeritaAcaraPrint(cfg, jadwal, mapel, totalSiswa) {
-    const hariIni = new Intl.DateTimeFormat('id-ID', {
-      timeZone: 'Asia/Makassar', weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
-    }).format(new Date());
-
+  function renderBeritaAcaraPrint(cfg, ba) {
     return `
       ${renderKopSurat(cfg)}
       <div style="text-align:center; margin:14px 0;">
-        <div style="font-size:12pt; font-weight:800; text-decoration:underline;">BERITA ACARA PELAKSANAAN ASESMEN / UJIAN BERBASIS KOMPUTER</div>
+        <div style="font-size:12pt; font-weight:800; text-decoration:underline;">${ba.judul_dokumen}</div>
         <div style="font-size:10pt; font-weight:600; margin-top:2px;">Tahun Pelajaran: ${cfg.tahun_pelajaran} | Semester: ${cfg.semester}</div>
       </div>
 
       <p style="line-height:1.6; text-align:justify; margin-bottom:12px;">
-        Pada hari ini <b>${hariIni}</b>, di <b>${cfg.nama_sekolah}</b> telah diselenggarakan Ujian Berbasis Komputer (CBT) / Asesmen Digital untuk mata pelajaran <b>${mapel?.nama_mapel || 'Semua Mata Pelajaran'}</b> dari pukul 07.30 sampai dengan pukul 09.30 WITA.
+        Pada hari ini <b>${ba.hari_tanggal}</b>, di <b>${cfg.nama_sekolah}</b> telah diselenggarakan Ujian Berbasis Komputer (CBT) / Asesmen Digital untuk mata pelajaran <b>${ba.mata_pelajaran}</b> pada pukul <b>${ba.waktu_pelaksanaan}</b>.
       </p>
 
       <table style="width:100%; border-collapse:collapse; margin-bottom:14px; font-size:10pt;">
         <tr><td style="padding:5px; border:1px solid #000; width:38%;">1. Satuan Pendidikan</td><td style="padding:5px; border:1px solid #000;">: ${cfg.nama_sekolah} (NPSN: ${cfg.npsn})</td></tr>
-        <tr><td style="padding:5px; border:1px solid #000;">2. Mata Pelajaran / Ujian</td><td style="padding:5px; border:1px solid #000;">: ${jadwal?.judul_ujian || 'Ujian CBT'} - ${mapel?.nama_mapel || 'Mapel'}</td></tr>
-        <tr><td style="padding:5px; border:1px solid #000;">3. Ruang Ujian & Sesi</td><td style="padding:5px; border:1px solid #000;">: Ruang 01 / Lab Komputer 1 - Sesi 1</td></tr>
-        <tr><td style="padding:5px; border:1px solid #000;">4. Waktu Pelaksanaan</td><td style="padding:5px; border:1px solid #000;">: 07.30 - 09.30 WITA</td></tr>
-        <tr><td style="padding:5px; border:1px solid #000;">5. Jumlah Peserta Seharusnya</td><td style="padding:5px; border:1px solid #000;">: ${totalSiswa} Orang</td></tr>
-        <tr><td style="padding:5px; border:1px solid #000;">6. Jumlah Peserta Hadir</td><td style="padding:5px; border:1px solid #000;">: ${totalSiswa} Orang</td></tr>
-        <tr><td style="padding:5px; border:1px solid #000;">7. Jumlah Peserta Tidak Hadir</td><td style="padding:5px; border:1px solid #000;">: 0 Orang</td></tr>
-        <tr><td style="padding:5px; border:1px solid #000;">8. Rincian Peserta Tidak Hadir</td><td style="padding:5px; border:1px solid #000;">: Nihil (Semua peserta hadir lengkap)</td></tr>
+        <tr><td style="padding:5px; border:1px solid #000;">2. Mata Pelajaran / Ujian</td><td style="padding:5px; border:1px solid #000;">: ${ba.mata_pelajaran}</td></tr>
+        <tr><td style="padding:5px; border:1px solid #000;">3. Ruang Ujian & Sesi</td><td style="padding:5px; border:1px solid #000;">: ${ba.ruang_sesi}</td></tr>
+        <tr><td style="padding:5px; border:1px solid #000;">4. Waktu Pelaksanaan</td><td style="padding:5px; border:1px solid #000;">: ${ba.waktu_pelaksanaan}</td></tr>
+        <tr><td style="padding:5px; border:1px solid #000;">5. Jumlah Peserta Seharusnya</td><td style="padding:5px; border:1px solid #000;">: ${ba.jumlah_seharusnya} Orang</td></tr>
+        <tr><td style="padding:5px; border:1px solid #000;">6. Jumlah Peserta Hadir</td><td style="padding:5px; border:1px solid #000;">: ${ba.jumlah_hadir} Orang</td></tr>
+        <tr><td style="padding:5px; border:1px solid #000;">7. Jumlah Peserta Tidak Hadir</td><td style="padding:5px; border:1px solid #000;">: ${ba.jumlah_tidak_hadir} Orang</td></tr>
+        <tr><td style="padding:5px; border:1px solid #000;">8. Rincian Peserta Tidak Hadir</td><td style="padding:5px; border:1px solid #000;">: ${ba.rincian_tidak_hadir}</td></tr>
       </table>
 
       <div style="border:1px solid #000; padding:8px; margin-bottom:14px;">
         <div style="font-weight:700; margin-bottom:4px;">Catatan Kejadian Khusus Selama Pelaksanaan Ujian:</div>
-        <div>Pelaksanaan asesmen CBT berjalan tertib, aman, lancar dan terkendali. Tidak ada kendala teknis server lokal maupun pemadaman listrik.</div>
+        <div style="white-space:pre-line;">${ba.catatan_khusus}</div>
       </div>
 
       <p style="margin-bottom:18px;">Demikian Berita Acara ini dibuat dengan sesungguhnya untuk dapat dipergunakan sebagaimana mestinya.</p>
@@ -3058,7 +3189,7 @@
             NIP. ${cfg.nip_proktor}
           </td>
           <td style="width:34%; vertical-align:top;">
-            Muara Kaman, ${new Intl.DateTimeFormat('id-ID', { day: 'numeric', month: 'long', year: 'numeric' }).format(new Date())}<br/>
+            ${ba.tempat_tanggal_ttd}<br/>
             Kepala Satuan Pendidikan,<br/><br/><br/>
             <u><b>${cfg.nama_kepsek}</b></u><br/>
             NIP. ${cfg.nip_kepsek}
@@ -3938,7 +4069,7 @@
                       <td class="p-3.5 font-bold">${sesi.skor_pg || 0}</td>
                       <td class="p-3.5 font-bold">${sesi.skor_essay || 0}</td>
                       <td class="p-3.5 font-extrabold text-emerald-700 text-sm">${sesi.nilai_akhir || 0}</td>
-                      <td class="p-3.5"><span class="px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-bold">${sesi.status}</span></td>
+                      <td class="p-3.5"><span class="px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-bold">${sesi.status === 'selesai' ? 'Selesai' : sesi.status}</span></td>
                     </tr>
                   `;
                 }).join('')}
@@ -4546,32 +4677,31 @@
 
     document.getElementById('btn-logout')?.addEventListener('click', handleLogout);
 
+    // Toggle Sidebar Otomatis di Pojok Kiri Atas (HP, Tablet & Desktop)
     document.getElementById('btn-toggle-sidebar')?.addEventListener('click', () => {
-      state.sidebarCollapsed = !state.sidebarCollapsed;
+      state.sidebarOpen = !state.sidebarOpen;
+      render();
+    });
+
+    document.getElementById('btn-close-sidebar-inside')?.addEventListener('click', () => {
+      state.sidebarOpen = false;
+      render();
+    });
+
+    document.getElementById('sidebar-backdrop')?.addEventListener('click', () => {
+      state.sidebarOpen = false;
       render();
     });
 
     document.querySelectorAll('.nav-menu-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         state.activeMenu = btn.getAttribute('data-menu');
-        state.mobileDrawerOpen = false;
+        // Pada layar HP/tablet (<1024px), sidebar otomatis menutup setelah memilih menu
+        if (window.innerWidth < 1024) {
+          state.sidebarOpen = false;
+        }
         render();
       });
-    });
-
-    document.getElementById('btn-mobile-more')?.addEventListener('click', () => {
-      state.mobileDrawerOpen = true;
-      render();
-    });
-    document.getElementById('btn-close-mobile-drawer')?.addEventListener('click', () => {
-      state.mobileDrawerOpen = false;
-      render();
-    });
-    document.getElementById('mobile-drawer-backdrop')?.addEventListener('click', (e) => {
-      if (e.target.id === 'mobile-drawer-backdrop') {
-        state.mobileDrawerOpen = false;
-        render();
-      }
     });
 
     document.getElementById('btn-close-modal')?.addEventListener('click', () => {
@@ -4881,15 +5011,72 @@
       });
     });
 
-    // --- Cetak Dokumen Events ---
+    // --- Cetak Dokumen & Edit Berita Acara Events ---
     document.getElementById('select-doc-type')?.addEventListener('change', (e) => {
       state.docType = e.target.value;
+      state.editingBeritaAcara = false;
       render();
     });
+
+    document.getElementById('select-doc-jadwal')?.addEventListener('change', (e) => {
+      state.docJadwalId = e.target.value;
+      const cfg = getSchoolConfig();
+      const jadwal = state.db.jadwal_ujian.find(j => j.id === state.docJadwalId);
+      const mapel = state.db.mata_pelajaran.find(m => m.id === jadwal?.mapel_id);
+      const siswaAll = state.db.users_cbt.filter(u => u.role === 'siswa');
+      const filteredSiswa = state.docKelas === 'SEMUA'
+        ? siswaAll
+        : siswaAll.filter(s => (s.kelas || '').toLowerCase() === (state.docKelas || '').toLowerCase());
+      state.beritaAcaraForm = getDefaultBeritaAcaraData(cfg, jadwal, mapel, filteredSiswa.length);
+      render();
+    });
+
     document.getElementById('select-doc-kelas')?.addEventListener('change', (e) => {
       state.docKelas = e.target.value;
+      if (state.docType === 'berita_acara') {
+        const cfg = getSchoolConfig();
+        const jadwal = state.db.jadwal_ujian.find(j => j.id === state.docJadwalId) || state.db.jadwal_ujian[0];
+        const mapel = state.db.mata_pelajaran.find(m => m.id === jadwal?.mapel_id);
+        const siswaAll = state.db.users_cbt.filter(u => u.role === 'siswa');
+        const filteredSiswa = state.docKelas === 'SEMUA'
+          ? siswaAll
+          : siswaAll.filter(s => (s.kelas || '').toLowerCase() === (state.docKelas || '').toLowerCase());
+        state.beritaAcaraForm = getDefaultBeritaAcaraData(cfg, jadwal, mapel, filteredSiswa.length);
+      }
       render();
     });
+
+    document.getElementById('btn-toggle-edit-ba')?.addEventListener('click', () => {
+      state.editingBeritaAcara = !state.editingBeritaAcara;
+      render();
+    });
+
+    document.getElementById('btn-reset-ba')?.addEventListener('click', () => {
+      const cfg = getSchoolConfig();
+      const jadwal = state.db.jadwal_ujian.find(j => j.id === state.docJadwalId) || state.db.jadwal_ujian[0];
+      const mapel = state.db.mata_pelajaran.find(m => m.id === jadwal?.mapel_id);
+      const siswaAll = state.db.users_cbt.filter(u => u.role === 'siswa');
+      const filteredSiswa = state.docKelas === 'SEMUA'
+        ? siswaAll
+        : siswaAll.filter(s => (s.kelas || '').toLowerCase() === (state.docKelas || '').toLowerCase());
+      state.beritaAcaraForm = getDefaultBeritaAcaraData(cfg, jadwal, mapel, filteredSiswa.length);
+      showToast('Isi Berita Acara dikembalikan ke default.');
+      render();
+    });
+
+    document.querySelectorAll('.input-ba-field').forEach(inp => {
+      inp.addEventListener('input', (e) => {
+        const field = inp.getAttribute('data-ba-field');
+        if (field && state.beritaAcaraForm) {
+          state.beritaAcaraForm[field] = e.target.value;
+          const printEl = document.getElementById('print-area');
+          if (printEl && state.docType === 'berita_acara') {
+            printEl.innerHTML = renderBeritaAcaraPrint(getSchoolConfig(), state.beritaAcaraForm);
+          }
+        }
+      });
+    });
+
     document.getElementById('btn-print-doc')?.addEventListener('click', () => {
       const printEl = document.getElementById('print-area');
       if (printEl) {
